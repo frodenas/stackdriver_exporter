@@ -109,35 +109,59 @@ func createMonitoringService(ctx context.Context) (*monitoring.Service, error) {
 	return monitoringService, nil
 }
 
-func newHandler(projectIDs []string, m *monitoring.Service, logger log.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		collectParams := r.URL.Query()["collect"]
+type handler struct {
+	handler http.Handler
+	logger  log.Logger
 
-		// Create filters for "collect" query parameters.
-		filters := make(map[string]bool)
-		for _, param := range collectParams {
-			filters[param] = true
-		}
+	projectIDs []string
+	m          *monitoring.Service
+}
 
-		registry := prometheus.NewRegistry()
-
-		for _, project := range projectIDs {
-			monitoringCollector, err := collectors.NewMonitoringCollector(project, m, filters, logger)
-			if err != nil {
-				level.Error(logger).Log("err", err)
-				os.Exit(1)
-			}
-			registry.MustRegister(monitoringCollector)
-		}
-
-		gatherers := prometheus.Gatherers{
-			prometheus.DefaultGatherer,
-			registry,
-		}
-		// Delegate http serving to Prometheus client library, which will call collector.Collect.
-		h := promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{})
-		h.ServeHTTP(w, r)
+func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	collectParams := r.URL.Query()["collect"]
+	filters := make(map[string]bool)
+	for _, param := range collectParams {
+		filters[param] = true
 	}
+
+	if len(filters) > 0 {
+		h.innerHandler(filters).ServeHTTP(w, r)
+		return
+	}
+
+	h.handler.ServeHTTP(w, r)
+}
+
+func newHandler(projectIDs []string, m *monitoring.Service, logger log.Logger) *handler {
+	h := &handler{
+		logger:     logger,
+		projectIDs: projectIDs,
+		m:          m,
+	}
+
+	h.handler = h.innerHandler(nil)
+	return h
+}
+
+func (h *handler) innerHandler(filters map[string]bool) http.Handler {
+	registry := prometheus.NewRegistry()
+
+	for _, project := range h.projectIDs {
+		monitoringCollector, err := collectors.NewMonitoringCollector(project, h.m, filters, h.logger)
+		if err != nil {
+			level.Error(h.logger).Log("err", err)
+			os.Exit(1)
+		}
+		registry.MustRegister(monitoringCollector)
+	}
+
+	gatherers := prometheus.Gatherers{
+		prometheus.DefaultGatherer,
+		registry,
+	}
+
+	// Delegate http serving to Prometheus client library, which will call collector.Collect.
+	return promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{})
 }
 
 func main() {
@@ -172,9 +196,9 @@ func main() {
 	}
 
 	projectIDs := strings.Split(*projectID, ",")
-	handlerFunc := newHandler(projectIDs, monitoringService, logger)
+	handler := newHandler(projectIDs, monitoringService, logger)
 
-	http.Handle(*metricsPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
+	http.Handle(*metricsPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handler))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>
              <head><title>Stackdriver Exporter</title></head>

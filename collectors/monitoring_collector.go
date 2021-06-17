@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -207,6 +208,8 @@ func (c *MonitoringCollector) reportMonitoringMetrics(ch chan<- prometheus.Metri
 
 		c.apiCallsTotalMetric.Inc()
 
+		re := regexp.MustCompile(fmt.Sprintf("^(%s)", strings.Join(c.metricsTypePrefixes, "|")))
+
 		// It has been noticed that the same metric descriptor can be obtained from different GCP
 		// projects. When that happens, metrics are fetched twice and it provokes the error:
 		//     "collected metric xxx was collected before with the same name and label values"
@@ -218,7 +221,9 @@ func (c *MonitoringCollector) reportMonitoringMetrics(ch chan<- prometheus.Metri
 		// The following makes sure metric descriptors are unique to avoid fetching more than once
 		uniqueDescriptors := make(map[string]*monitoring.MetricDescriptor)
 		for _, descriptor := range page.MetricDescriptors {
-			uniqueDescriptors[descriptor.Type] = descriptor
+			if re.MatchString(descriptor.Type) {
+				uniqueDescriptors[descriptor.Type] = descriptor
+			}
 		}
 
 		errChannel := make(chan error, len(uniqueDescriptors))
@@ -273,35 +278,9 @@ func (c *MonitoringCollector) reportMonitoringMetrics(ch chan<- prometheus.Metri
 		return <-errChannel
 	}
 
-	var wg = &sync.WaitGroup{}
-
-	errChannel := make(chan error, len(c.metricsTypePrefixes))
-
-	for _, metricsTypePrefix := range c.metricsTypePrefixes {
-		wg.Add(1)
-		go func(metricsTypePrefix string) {
-			defer wg.Done()
-			level.Debug(c.logger).Log("msg", "listing Google Stackdriver Monitoring metric descriptors starting with", "prefix", metricsTypePrefix)
-			ctx := context.Background()
-			filter := fmt.Sprintf("metric.type = starts_with(\"%s\")", metricsTypePrefix)
-			if c.monitoringDropDelegatedProjects {
-				filter = fmt.Sprintf(
-					"project = \"%s\" AND metric.type = starts_with(\"%s\")",
-					c.projectID,
-					metricsTypePrefix)
-			}
-			if err := c.monitoringService.Projects.MetricDescriptors.List(utils.ProjectResource(c.projectID)).
-				Filter(filter).
-				Pages(ctx, metricDescriptorsFunction); err != nil {
-				errChannel <- err
-			}
-		}(metricsTypePrefix)
-	}
-
-	wg.Wait()
-	close(errChannel)
-
-	return <-errChannel
+	ctx := context.Background()
+	return c.monitoringService.Projects.MetricDescriptors.List(utils.ProjectResource(c.projectID)).
+		Pages(ctx, metricDescriptorsFunction)
 }
 
 func (c *MonitoringCollector) reportTimeSeriesMetrics(

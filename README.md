@@ -55,7 +55,7 @@ This exporter can be deployed using the [Prometheus BOSH Release][prometheus-bos
 
 The Google Stackdriver Exporter uses the Google Golang Client Library, which offers a variety of ways to provide credentials. Please refer to the [Google Application Default Credentials][application-default-credentials] documentation to see how the credentials can be provided.
 
-If you are using IAM roles, the `monitoring.metricDescriptors.list` and `monitoring.timeSeries.list` IAM permissions are required. The `roles/monitoring.viewer` IAM role contains those permissions. See the [Access Control Guide][access-control] for more information.
+If you are using IAM roles, the `roles/monitoring.viewer` IAM role contains the required permissions. See the [Access Control Guide][access-control] for more information.
 
 If you are still using the legacy [Access scopes][access-scopes], the `https://www.googleapis.com/auth/monitoring.read` scope is required.
 

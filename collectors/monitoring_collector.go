@@ -44,6 +44,10 @@ var (
 		"monitoring.metrics-offset", "Offset for the Google Stackdriver Monitoring Metrics interval into the past ($STACKDRIVER_EXPORTER_MONITORING_METRICS_OFFSET).",
 	).Envar("STACKDRIVER_EXPORTER_MONITORING_METRICS_OFFSET").Default("0s").Duration()
 
+	monitoringMetricsIngestDelay = kingpin.Flag(
+		"monitoring.metrics-ingest-delay", "Offset for the Google Stackdriver Monitoring Metrics interval into the past by the ingest delay from the metric's metadata ($STACKDRIVER_EXPORTER_MONITORING_METRICS_INGEST_DELAY).",
+	).Envar("STACKDRIVER_EXPORTER_MONITORING_METRICS_INGEST_DELAY").Default("false").Bool()
+
 	collectorFillMissingLabels = kingpin.Flag(
 		"collector.fill-missing-labels", "Fill missing metrics labels with empty string to avoid label dimensions inconsistent failure ($STACKDRIVER_EXPORTER_COLLECTOR_FILL_MISSING_LABELS).",
 	).Envar("STACKDRIVER_EXPORTER_COLLECTOR_FILL_MISSING_LABELS").Default("true").Bool()
@@ -58,6 +62,7 @@ type MonitoringCollector struct {
 	metricsTypePrefixes             []string
 	metricsInterval                 time.Duration
 	metricsOffset                   time.Duration
+	metricsIngestDelay              bool
 	monitoringService               *monitoring.Service
 	apiCallsTotalMetric             prometheus.Counter
 	scrapesTotalMetric              prometheus.Counter
@@ -151,6 +156,7 @@ func NewMonitoringCollector(projectID string, monitoringService *monitoring.Serv
 		metricsTypePrefixes:             filteredPrefixes,
 		metricsInterval:                 *monitoringMetricsInterval,
 		metricsOffset:                   *monitoringMetricsOffset,
+		metricsIngestDelay:              *monitoringMetricsIngestDelay,
 		monitoringService:               monitoringService,
 		apiCallsTotalMetric:             apiCallsTotalMetric,
 		scrapesTotalMetric:              scrapesTotalMetric,
@@ -238,6 +244,22 @@ func (c *MonitoringCollector) reportMonitoringMetrics(ch chan<- prometheus.Metri
 						c.projectID,
 						metricDescriptor.Type)
 				}
+
+				if c.metricsIngestDelay &&
+					metricDescriptor.Metadata != nil &&
+					metricDescriptor.Metadata.IngestDelay != "" {
+					ingestDelay := metricDescriptor.Metadata.IngestDelay
+					ingestDelayDuration, err := time.ParseDuration(ingestDelay)
+					if err != nil {
+						level.Error(c.logger).Log("msg", "error parsing ingest delay from metric metadata", "descriptor", metricDescriptor.Type, "err", err, "delay", ingestDelay)
+						errChannel <- err
+						return
+					}
+					level.Debug(c.logger).Log("msg", "adding ingest delay", "descriptor", metricDescriptor.Type, "delay", ingestDelay)
+					endTime.Add(ingestDelayDuration)
+					startTime.Add(ingestDelayDuration)
+				}
+
 				timeSeriesListCall := c.monitoringService.Projects.TimeSeries.List(utils.ProjectResource(c.projectID)).
 					Filter(filter).
 					IntervalStartTime(startTime.Format(time.RFC3339Nano)).

@@ -1,4 +1,5 @@
 ## master / unreleased
+* [FEATURE] Add support to include ingest delay when pull metrics #129
 
 ## 0.11.0 / 2020-09-02
 
